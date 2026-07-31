@@ -61,13 +61,64 @@ def cmd_report(args):
         print("no runs recorded yet")
         return
     for r in rows[-args.limit:]:
-        print(f"{r['ts']}  {r['label']:<12}  {r['gen_tps'] or 0:6.1f} tok/s  "
-              f"quality {r['quality'] or 0:.4f}  ngl={r['ngl']}")
+        ngl = r["ngl"] if r["ngl"] is not None else "default"
+        print(f"{r['ts']}  {r['label']:<18}  {r['gen_tps'] or 0:6.1f} tok/s  "
+              f"quality {r['quality'] or 0:.4f}  ngl={ngl}")
 
 
 def cmd_start(args):
     import webapp
     webapp.serve(port=args.port, open_browser=not args.no_browser)
+
+
+def cmd_default(args):
+    import db
+    import quality
+    import reference
+    from types import SimpleNamespace
+
+    model = _resolve(args.model)
+    ref_model = _resolve(args.ref_model) if args.ref_model else model
+    calib = Path(args.calib)
+    if not calib.exists():
+        sys.exit(f"calibration file not found: {calib}")
+
+    hw = hardware.probe()
+    info = model_info.inspect(model)
+    model_hash = reference.file_hash(model)
+    calib_hash = reference.file_hash(calib)
+
+    con = db.connect()
+    db.save_model(con, model_hash, info)
+
+    print("running llama.cpp with no settings overridden - its own compiled-in "
+          "defaults for -ngl, -t, -ctk/-ctv, -ot\n")
+
+    ref = reference.ensure_reference(ref_model, calib)
+    s = speed.measure_default(model)
+    if s is None:
+        sys.exit("default speed measurement failed")
+    q = quality.measure_kl_default(model, ref, calib)
+
+    print(f"gen:     {s.gen_tps:.1f} tok/s")
+    print(f"prompt:  {s.prompt_tps:.1f} tok/s")
+    if q:
+        print(f"quality: {quality.quality_score(q):.4f}   kl_mean: {q.kl_mean:.6f}")
+    else:
+        print("quality: measurement failed")
+
+    cand = SimpleNamespace(label="llama.cpp default", ngl=None, threads=None,
+                           ctk="default", ot_pattern=None)
+    ev = SimpleNamespace(gen_tps=s.gen_tps,
+                        quality=quality.quality_score(q) if q else None,
+                        kl_mean=q.kl_mean if q else None,
+                        vram_mb=s.vram_used_mb, spilled=s.spilled)
+    db.save_evaluation(con, model_hash, hw, cand, ev, calib_hash)
+
+    print(f"\nrun it exactly as llama.cpp ships, no flags at all:\n"
+          f"  llama-server.exe -m {model.name}")
+    print("\n(this baseline is now saved and will show up in 'optimum start' and "
+          "'optimum report' next to your tuned candidates)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,6 +150,12 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--port", type=int, default=8765)
     st.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
     st.set_defaults(func=cmd_start)
+
+    d = sub.add_parser("default", help="measure llama.cpp with every setting left at its own default (no tuning)")
+    d.add_argument("model")
+    d.add_argument("--ref-model", help="unsqueezed/high-precision model for the quality baseline (defaults to --model)")
+    d.add_argument("--calib", default=r"C:\nativetune\data\calib-50kb.txt")
+    d.set_defaults(func=cmd_default)
 
     return p
 

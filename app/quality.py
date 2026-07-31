@@ -38,6 +38,16 @@ def measure_kl(model: Path, ref_kld: Path, calib: Path,
         return None
     return parse_kl_output(res.stdout + res.stderr)
 
+def measure_kl_default(model: Path, ref_kld: Path, calib: Path) -> QualityResult | None:
+    """Runs llama-perplexity with none of -ngl/-ctk/-ctv/-ot set — llama.cpp's own
+    compiled-in defaults, not a NativeTune choice."""
+    args = ["-m", model, "-f", calib,
+            "--kl-divergence-base", ref_kld, "--kl-divergence"]
+    res = runner.run(PERPLEXITY, args, timeout=900)
+    if not res.ok:
+        return None
+    return parse_kl_output(res.stdout + res.stderr)
+
 def quality_score(q: QualityResult) -> float:
     """One number, 0 to 1. Higher is better."""
     if q.top1_agree > 0:

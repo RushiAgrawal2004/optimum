@@ -54,6 +54,29 @@ def measure(model: Path, ngl: int, ot: str = None, threads: int = 6,
         spilled=(after < 150),
     )
 
+def measure_default(model: Path, profile: dict = None) -> SpeedResult | None:
+    """Runs llama-bench with none of -ngl/-t/-ctk/-ctv/-ot set — every optimization
+    flag left at whatever llama.cpp itself compiles in, not a NativeTune choice."""
+    profile = profile or FAST_BENCH
+    args = ["-m", model, "-p", profile["p"], "-n", profile["n"], "-r", profile["r"],
+            "-o", "json"]
+
+    before = hardware.free_vram_mb()
+    res = runner.run(BENCH, args, timeout=600)
+    if not res.ok:
+        return None
+    parsed = parse_bench_json(res.stdout)
+    if not parsed:
+        return None
+    after = hardware.free_vram_mb()
+
+    return SpeedResult(
+        gen_tps=parsed["gen_tps"],
+        prompt_tps=parsed["prompt_tps"] or 0,
+        vram_used_mb=before - after,
+        spilled=(after < 150),
+    )
+
 def warmup(model: Path, rounds: int = 3):
     from config import PROBE_BENCH
     for _ in range(rounds):
