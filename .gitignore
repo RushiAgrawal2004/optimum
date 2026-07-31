@@ -1,0 +1,9 @@
+llama/
+models/
+cache/
+results.db
+app/venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
