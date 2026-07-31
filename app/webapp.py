@@ -13,7 +13,29 @@ from types import SimpleNamespace
 import db
 import frontier
 import hardware
-from config import TENSOR_GROUPS
+from config import LLAMA_DIR, TENSOR_GROUPS
+
+
+def _quote(s: str) -> str:
+    return f'"{s}"' if " " in s else s
+
+
+def _command_for(model_path: str | None, run: dict) -> str | None:
+    """The exact llama-server.exe command line for one recorded run, built the
+    same way report.launch_command() does but usable directly on a raw db row."""
+    if not model_path:
+        return None
+    parts = [str(LLAMA_DIR / "llama-server.exe"), "-m", model_path]
+    if run.get("ngl") is not None:
+        parts += ["-ngl", str(run["ngl"])]
+    if run.get("threads") is not None:
+        parts += ["-t", str(run["threads"])]
+    if run.get("ctk") and run["ctk"] != "default":
+        parts += ["-ctk", run["ctk"], "-ctv", run["ctk"]]
+    cmd = " ".join(_quote(p) for p in parts)
+    if run.get("ot_pattern"):
+        cmd += f' -ot "{run["ot_pattern"]}"'
+    return cmd
 
 
 def _latest_sensitivity_by_model(sens_rows: list[dict]) -> dict[str, list[dict]]:
@@ -59,9 +81,25 @@ def gather() -> dict:
         if r["id"] in on_frontier and r["quality"] and r["quality"] >= 0.8 and r["gen_tps"] > best_tps:
             best_id, best_tps = r["id"], r["gen_tps"]
 
+    default_tps_by_model: dict[str, float] = {}
+    for r in runs:
+        if r["label"] == "llama.cpp default" and r["gen_tps"]:
+            default_tps_by_model[r["model_hash"]] = r["gen_tps"]
+
     for r in runs:
         r["on_frontier"] = r["id"] in on_frontier
         r["is_best"] = r["id"] == best_id
+        model_path = models.get(r["model_hash"], {}).get("path")
+        r["command"] = _command_for(model_path, r)
+
+    best = None
+    if best_id is not None:
+        best = next(r for r in runs if r["id"] == best_id)
+        default_tps = default_tps_by_model.get(best["model_hash"])
+        best["speedup_pct"] = (
+            round(100 * (best["gen_tps"] / default_tps - 1), 1)
+            if default_tps else None
+        )
 
     return {
         "hw": {
@@ -72,6 +110,7 @@ def gather() -> dict:
         "models": models,
         "sensitivity": sens_by_model,
         "runs": runs,
+        "best": best,
         "tensor_groups": TENSOR_GROUPS,
     }
 
@@ -188,6 +227,25 @@ def render(data: dict) -> str:
                     font-size: 12px; cursor: pointer; }}
 
   .empty {{ color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; }}
+
+  .best-pick {{ border: 1px solid var(--good); }}
+  .best-pick .kicker {{ font-size: 12px; color: var(--good); font-weight: 600;
+                         text-transform: uppercase; letter-spacing: 0.04em; }}
+  .best-pick .headline {{ font-size: 20px; font-weight: 600; margin: 4px 0 2px; }}
+  .best-pick .sub {{ font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; }}
+  .cmd-row {{ display: flex; align-items: stretch; gap: 8px; }}
+  .cmd-box {{ flex: 1; background: var(--page); border: 1px solid var(--border);
+              border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, monospace;
+              font-size: 12.5px; color: var(--text-primary); overflow-x: auto;
+              white-space: pre; }}
+  .copy-btn {{ border: 1px solid var(--border); background: var(--surface-1);
+               color: var(--text-primary); border-radius: 6px; padding: 0 14px;
+               font-size: 12px; cursor: pointer; white-space: nowrap; }}
+  td.cmd {{ font-family: ui-monospace, monospace; font-size: 11.5px;
+            max-width: 360px; overflow-wrap: anywhere; }}
+  .row-copy {{ border: 1px solid var(--border); background: var(--surface-1);
+               color: var(--text-secondary); border-radius: 5px; padding: 2px 8px;
+               font-size: 11px; cursor: pointer; margin-left: 8px; }}
 </style>
 </head>
 <body>
@@ -211,6 +269,19 @@ function toggleTheme() {{
 }}
 
 function fmt(n, d) {{ return (n === null || n === undefined) ? '—' : Number(n).toFixed(d); }}
+
+function copyText(text, btn) {{
+  const done = () => {{
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => {{ btn.textContent = orig; }}, 1200);
+  }};
+  if (navigator.clipboard && navigator.clipboard.writeText) {{
+    navigator.clipboard.writeText(text).then(done).catch(done);
+  }} else {{
+    done();
+  }}
+}}
 
 function el(tag, attrs, children) {{
   const e = document.createElement(tag);
@@ -286,6 +357,43 @@ function renderModel(hash, model, sensRows) {{
     card.appendChild(tbl);
     s.appendChild(card);
   }}
+  return s;
+}}
+
+function renderBestPick(best) {{
+  const s = el('section');
+  s.appendChild(el('h2', {{}}, ['Recommended launch command']));
+  const card = el('div', {{class: 'card best-pick'}});
+
+  if (!best) {{
+    card.appendChild(el('div', {{class: 'empty'}},
+      ['No winning candidate yet — run "python cli.py tune <model>".']));
+    s.appendChild(card);
+    return s;
+  }}
+
+  card.appendChild(el('div', {{class: 'kicker'}}, ['Best pick — ' + best.label]));
+  card.appendChild(el('div', {{class: 'headline'}},
+    [fmt(best.gen_tps,1) + ' tok/s at quality ' + fmt(best.quality,4)]));
+
+  let subText = 'ngl=' + best.ngl + ' · threads=' + best.threads + ' · ctk=' + best.ctk;
+  if (best.speedup_pct !== null && best.speedup_pct !== undefined) {{
+    subText += '  —  ' + (best.speedup_pct >= 0 ? '+' : '') + best.speedup_pct +
+      '% vs. untouched llama.cpp default';
+  }}
+  card.appendChild(el('div', {{class: 'sub'}}, [subText]));
+
+  if (best.command) {{
+    const row = el('div', {{class: 'cmd-row'}});
+    const box = el('div', {{class: 'cmd-box'}}, [best.command]);
+    const btn = el('button', {{class: 'copy-btn'}}, ['Copy']);
+    btn.addEventListener('click', () => copyText(best.command, btn));
+    row.appendChild(box);
+    row.appendChild(btn);
+    card.appendChild(row);
+  }}
+
+  s.appendChild(card);
   return s;
 }}
 
@@ -401,9 +509,16 @@ function renderScatter(runs) {{
   tbl.appendChild(el('thead', {{}}, [el('tr', {{}}, [
     el('th', {{}}, ['Label']), el('th', {{class:'num'}}, ['tok/s']),
     el('th', {{class:'num'}}, ['Quality']), el('th', {{}}, ['ngl']),
-    el('th', {{}}, ['threads']), el('th', {{}}, ['ctk']), el('th', {{}}, ['-ot'])])]));
+    el('th', {{}}, ['threads']), el('th', {{}}, ['ctk']), el('th', {{}}, ['-ot']),
+    el('th', {{}}, ['Command'])])]));
   const tbody = el('tbody');
   runs.slice().sort((a,b) => (b.gen_tps||0) - (a.gen_tps||0)).forEach(r => {{
+    const cmdCell = el('td', {{class: 'cmd'}}, [r.command || '—']);
+    if (r.command) {{
+      const btn = el('button', {{class: 'row-copy'}}, ['Copy']);
+      btn.addEventListener('click', () => copyText(r.command, btn));
+      cmdCell.appendChild(btn);
+    }}
     const tr = el('tr', r.is_best ? {{class: 'best'}} : {{}}, [
       el('td', {{}}, [r.label + (r.is_best ? ' ← pick' : '')]),
       el('td', {{class:'num'}}, [fmt(r.gen_tps,1)]),
@@ -412,6 +527,7 @@ function renderScatter(runs) {{
       el('td', {{}}, [String(r.threads)]),
       el('td', {{}}, [r.ctk]),
       el('td', {{}}, [r.ot_pattern || '—']),
+      cmdCell,
     ]);
     tbody.appendChild(tr);
   }});
@@ -437,6 +553,7 @@ if (!modelHashes.length) {{
   }});
 }}
 
+app.appendChild(renderBestPick(DATA.best));
 app.appendChild(renderScatter(DATA.runs));
 </script>
 </body>

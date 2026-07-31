@@ -36,21 +36,31 @@ CREATE TABLE IF NOT EXISTS models (
     model_hash    TEXT PRIMARY KEY,
     arch          TEXT,
     n_layers      INTEGER,
-    file_size_mb  REAL
+    file_size_mb  REAL,
+    path          TEXT
 );
 """
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Add columns that didn't exist in earlier versions of this schema,
+    so an existing results.db from before this change keeps working."""
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(models)").fetchall()}
+    if "path" not in cols:
+        con.execute("ALTER TABLE models ADD COLUMN path TEXT")
+        con.commit()
 
 def connect() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
+    _migrate(con)
     return con
 
 def save_model(con, model_hash: str, info) -> None:
     con.execute(
-        "INSERT OR REPLACE INTO models (model_hash, arch, n_layers, file_size_mb)"
-        " VALUES (?,?,?,?)",
-        (model_hash, info.arch, info.n_layers, info.file_size_mb),
+        "INSERT OR REPLACE INTO models (model_hash, arch, n_layers, file_size_mb, path)"
+        " VALUES (?,?,?,?,?)",
+        (model_hash, info.arch, info.n_layers, info.file_size_mb, str(info.path)),
     )
     con.commit()
 
