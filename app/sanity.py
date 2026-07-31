@@ -43,15 +43,20 @@ def check_quality_ordering(model_low: Path, model_high: Path, ref_kld: Path, cal
     return ok
 
 
-def check_scorer_detects_broken(ruined_model: Path, ref_kld: Path, calib: Path, ngl: int, max_score: float = 0.15) -> bool:
-    q = quality.measure_kl(ruined_model, ref_kld, calib, ngl)
-    if not q:
-        print("  FAIL: measurement errored out")
+def check_scorer_detects_broken(ruined_model: Path, healthy_model: Path, ref_kld: Path,
+                                calib: Path, ngl: int, min_drop: float = 0.10) -> bool:
+    """top1_agree stays fairly high even on a badly broken model — common tokens
+    (punctuation, articles) are easy regardless of quantization — so this checks
+    a relative drop against a known-good model rather than an absolute floor."""
+    q_ruined = quality.measure_kl(ruined_model, ref_kld, calib, ngl)
+    q_healthy = quality.measure_kl(healthy_model, ref_kld, calib, ngl)
+    if not q_ruined or not q_healthy:
+        print("  FAIL: a measurement errored out")
         return False
-    s = quality.quality_score(q)
-    print(f"  ruined model scored: {s:.4f}")
-    ok = s < max_score
-    print("  PASS" if ok else "  FAIL: a ruined model scored well, scorer is not measuring anything")
+    s_ruined, s_healthy = quality.quality_score(q_ruined), quality.quality_score(q_healthy)
+    print(f"  ruined: {s_ruined:.4f}   healthy: {s_healthy:.4f}   drop: {s_healthy - s_ruined:.4f}")
+    ok = (s_healthy - s_ruined) >= min_drop
+    print("  PASS" if ok else "  FAIL: ruined model barely scored worse, scorer is not measuring anything")
     return ok
 
 
@@ -84,5 +89,16 @@ if __name__ == "__main__":
     check_ot_pattern(m, runner.build_ot_pattern(
         ["attn_q", "attn_k", "attn_v", "attn_output", "ffn_gate", "ffn_up", "ffn_down"]))
 
-    print("\nrun quality/order/ruined-model checks manually once you have a "
-          "reference .kld and a deliberately ruined model file.")
+    ref_kld = MODEL_DIR.parent / "cache" / "ref_test.kld"
+    calib = MODEL_DIR.parent / "data" / "calib-50kb.txt"
+    ruined = MODEL_DIR / "qwen1.5b-ruined-q2.gguf"
+    q8 = MODEL_DIR / "qwen1.5b-q8.gguf"
+    if ref_kld.exists() and calib.exists() and ruined.exists():
+        print("\n[4] quality ordering check")
+        check_quality_ordering(ruined, q8, ref_kld, calib, ngl=99)
+
+        print("\n[5] ruined-model check")
+        check_scorer_detects_broken(ruined, q8, ref_kld, calib, ngl=99)
+    else:
+        print("\nskipping quality/ruined-model checks: build a reference .kld "
+              "and a ruined model first (see reference.py, llama-quantize)")
