@@ -65,8 +65,13 @@ def cmd_report(args):
               f"quality {r['quality'] or 0:.4f}  ngl={r['ngl']}")
 
 
+def cmd_start(args):
+    import webapp
+    webapp.serve(port=args.port, open_browser=not args.no_browser)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="nativetune")
+    p = argparse.ArgumentParser(prog="optimum")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("probe", help="show GPU/RAM").set_defaults(func=cmd_probe)
@@ -89,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("report", help="show recent recorded runs")
     r.add_argument("--limit", type=int, default=20)
     r.set_defaults(func=cmd_report)
+
+    st = sub.add_parser("start", help="launch the local Optimum dashboard (graphs + metrics)")
+    st.add_argument("--port", type=int, default=8765)
+    st.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
+    st.set_defaults(func=cmd_start)
 
     return p
 
