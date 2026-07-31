@@ -23,9 +23,9 @@ def inspect(path: Path) -> ModelInfo:
     arch, n_layers = "unknown", 0
     for field_name, f in reader.fields.items():
         if field_name == "general.architecture":
-            arch = str(f.parts[f.data[0]], encoding="utf-8")
+            arch = str(f.contents())
         if field_name.endswith(".block_count"):
-            n_layers = int(f.parts[f.data[0]])
+            n_layers = int(f.contents())
 
     groups = {g: GroupInfo(g, 0.0, 0) for g in TENSOR_GROUPS}
     for t in reader.tensors:

@@ -78,7 +78,8 @@ def save_sensitivity(con, model_hash: str, gpu_name: str, groups: dict) -> None:
     con.commit()
 
 def load_all(con, table: str = "runs") -> list[dict]:
-    rows = con.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+    order_by = "model_hash" if table == "models" else "id"
+    rows = con.execute(f"SELECT * FROM {table} ORDER BY {order_by}").fetchall()
     return [dict(r) for r in rows]
 
 def load_sensitivity(con, model_hash: str, gpu_name: str) -> dict | None:

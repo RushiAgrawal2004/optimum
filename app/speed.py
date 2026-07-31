@@ -42,6 +42,9 @@ def measure(model: Path, ngl: int, ot: str = None, threads: int = 6,
     parsed = parse_bench_json(res.stdout)
     if not parsed:
         return None
+    # llama-bench has already exited and freed its VRAM by the time we read
+    # "after", so vram_used_mb reads ~0 here. To get a real peak, VRAM must be
+    # polled from a background thread while the subprocess is still running.
     after = hardware.free_vram_mb()
 
     return SpeedResult(

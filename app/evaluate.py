@@ -20,7 +20,7 @@ def evaluate(model: Path, cand, ref_kld: Path, calib: Path) -> Evaluation | None
     if q is None:
         return None
     return Evaluation(cand, s.gen_tps, quality.quality_score(q),
-                      q.kl_mean, s.vram_mb, s.spilled)
+                      q.kl_mean, s.vram_used_mb, s.spilled)
 
 def evaluate_all(model, candidates, ref_kld, calib, shuffle=True) -> list:
     order = list(candidates)
