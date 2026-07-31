@@ -89,17 +89,30 @@ def gather() -> dict:
     for r in runs:
         r["on_frontier"] = r["id"] in on_frontier
         r["is_best"] = r["id"] == best_id
+        r["is_default"] = r["label"] == "llama.cpp default"
         model_path = models.get(r["model_hash"], {}).get("path")
         r["command"] = _command_for(model_path, r)
 
     best = None
+    before_after = None
     if best_id is not None:
         best = next(r for r in runs if r["id"] == best_id)
-        default_tps = default_tps_by_model.get(best["model_hash"])
+        default_row = next(
+            (r for r in runs if r["is_default"] and r["model_hash"] == best["model_hash"]),
+            None,
+        )
+        default_tps = default_row["gen_tps"] if default_row else None
         best["speedup_pct"] = (
             round(100 * (best["gen_tps"] / default_tps - 1), 1)
             if default_tps else None
         )
+        if default_row:
+            before_after = {
+                "before": {"label": default_row["label"], "gen_tps": default_row["gen_tps"],
+                          "quality": default_row["quality"]},
+                "after": {"label": best["label"], "gen_tps": best["gen_tps"],
+                         "quality": best["quality"]},
+            }
 
     return {
         "hw": {
@@ -111,6 +124,7 @@ def gather() -> dict:
         "sensitivity": sens_by_model,
         "runs": runs,
         "best": best,
+        "before_after": before_after,
         "tensor_groups": TENSOR_GROUPS,
     }
 
@@ -202,6 +216,10 @@ def render(data: dict) -> str:
   .bar-fill {{ height: 20px; background: var(--series-1);
                border-radius: 0 4px 4px 0; display: flex; align-items: center;
                min-width: 2px; }}
+  .bar-fill.default {{ background: var(--series-dominated); }}
+  .bar-fill.tuned {{ background: var(--series-1); }}
+  .ba-headline {{ font-size: 16px; font-weight: 600; margin-bottom: 16px; }}
+  .ba-headline .good {{ color: var(--good); }}
   .bar-value {{ font-size: 12px; color: var(--text-secondary); margin-left: 8px;
                 white-space: nowrap; }}
 
@@ -360,6 +378,62 @@ function renderModel(hash, model, sensRows) {{
   return s;
 }}
 
+function metricPair(title, beforeVal, afterVal, unit, decimals) {{
+  const wrap = el('div', {{style: 'margin-bottom:22px'}});
+  wrap.appendChild(el('div', {{style: 'font-size:13px;color:var(--text-secondary);margin-bottom:8px'}}, [title]));
+  const maxVal = Math.max(beforeVal || 0, afterVal || 0, 0.001);
+  [['default', 'Before', beforeVal], ['tuned', 'After', afterVal]].forEach(([cls, lbl, val]) => {{
+    const row = el('div', {{class: 'bar-row'}});
+    row.appendChild(el('div', {{class: 'bar-label'}}, [lbl]));
+    const track = el('div', {{class: 'bar-track'}});
+    const pct = Math.max(2, 100 * Math.max(val || 0, 0) / maxVal);
+    track.appendChild(el('div', {{class: 'bar-fill ' + cls, style: 'width:' + pct + '%'}}));
+    row.appendChild(track);
+    row.appendChild(el('div', {{class: 'bar-value'}}, [fmt(val, decimals) + ' ' + unit]));
+    wrap.appendChild(row);
+  }});
+  return wrap;
+}}
+
+function renderBeforeAfter(ba) {{
+  const s = el('section');
+  s.appendChild(el('h2', {{}}, ['Before vs. after tuning']));
+  const card = el('div', {{class: 'card'}});
+
+  if (!ba) {{
+    card.appendChild(el('div', {{class: 'empty'}}, [
+      'Run "python cli.py default <model>" to measure the untouched baseline, then it will compare here against your tuned pick.']));
+    s.appendChild(card);
+    return s;
+  }}
+
+  const legend = el('div', {{class: 'legend'}}, [
+    el('span', {{}}, [el('span', {{class:'swatch', style:'background:var(--series-dominated)'}}), 'Before — ' + ba.before.label]),
+    el('span', {{}}, [el('span', {{class:'swatch', style:'background:var(--series-1)'}}), 'After — ' + ba.after.label]),
+  ]);
+  card.appendChild(legend);
+
+  const speedPct = ba.before.gen_tps ? Math.round(1000 * (ba.after.gen_tps / ba.before.gen_tps - 1)) / 10 : null;
+  const qDelta = (ba.after.quality != null && ba.before.quality != null) ? ba.after.quality - ba.before.quality : null;
+  let headline = '';
+  if (speedPct !== null) {{
+    headline += (speedPct >= 0 ? '+' : '') + speedPct + '% speed';
+  }}
+  if (qDelta !== null) {{
+    headline += (headline ? ', ' : '') + (qDelta >= 0 ? '+' : '') + fmt(qDelta, 4) + ' quality';
+  }}
+  if (headline) {{
+    card.appendChild(el('div', {{class: 'ba-headline'}}, [el('span', {{class: 'good'}}, [headline]),
+      ' from tuning, on the same model and GPU']));
+  }}
+
+  card.appendChild(metricPair('Generation speed', ba.before.gen_tps, ba.after.gen_tps, 'tok/s', 1));
+  card.appendChild(metricPair('Quality score', ba.before.quality, ba.after.quality, '', 4));
+
+  s.appendChild(card);
+  return s;
+}}
+
 function renderBestPick(best) {{
   const s = el('section');
   s.appendChild(el('h2', {{}}, ['Recommended launch command']));
@@ -472,10 +546,10 @@ function renderScatter(runs) {{
 
     const dot = document.createElementNS(svgNS, 'circle');
     dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
-    dot.setAttribute('r', r.is_best ? 7 : 5);
+    dot.setAttribute('r', (r.is_best || r.is_default) ? 7 : 5);
     dot.setAttribute('fill', color);
     dot.setAttribute('stroke', 'var(--surface-1)');
-    dot.setAttribute('stroke-width', '2');
+    dot.setAttribute('stroke-width', r.is_default ? '3' : '2');
 
     const show = (evt) => {{
       tooltip.innerHTML = '<b>' + r.label + '</b><br>' + fmt(r.gen_tps,1) + ' tok/s · quality ' + fmt(r.quality,4) +
@@ -493,12 +567,12 @@ function renderScatter(runs) {{
     svg.appendChild(hit);
     svg.appendChild(dot);
 
-    if (r.is_best) {{
+    if (r.is_best || r.is_default) {{
       const lbl = document.createElementNS(svgNS, 'text');
       lbl.setAttribute('x', cx + 10); lbl.setAttribute('y', cy - 10);
       lbl.setAttribute('fill', 'var(--text-primary)'); lbl.setAttribute('font-size', '11');
       lbl.setAttribute('font-weight', '600');
-      lbl.textContent = 'best pick';
+      lbl.textContent = r.is_best ? 'best pick' : 'untouched default';
       svg.appendChild(lbl);
     }}
   }});
@@ -540,6 +614,7 @@ function renderScatter(runs) {{
 
 const app = document.getElementById('app');
 app.appendChild(renderHardware(DATA.hw));
+app.appendChild(renderBeforeAfter(DATA.before_after));
 
 const modelHashes = Object.keys(DATA.models).length ? Object.keys(DATA.models)
   : [...new Set(DATA.runs.map(r => r.model_hash))];
