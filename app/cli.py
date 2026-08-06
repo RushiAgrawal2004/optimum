@@ -237,56 +237,69 @@ def cmd_serve(args):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="optimum")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(
+        prog="optimum",
+        description="Auto-tune llama.cpp for your GPU and model.")
+    # Subcommands are declared in the order you'd actually use them, so
+    # `optimum --help` reads as a walkthrough rather than an alphabet soup.
+    # Each keeps its pre-0.2 name as an alias so existing scripts don't break.
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
 
-    sub.add_parser("probe", help="show GPU/RAM").set_defaults(func=cmd_probe)
+    gpu = sub.add_parser("gpu", aliases=["probe"],
+                         help="show your GPU and memory")
+    gpu.set_defaults(func=cmd_probe)
 
-    i = sub.add_parser("inspect", help="show a model's parts and sizes")
-    i.add_argument("model")
-    i.set_defaults(func=cmd_inspect)
+    ins = sub.add_parser("inspect",
+                         help="show a model's size, layers and parts")
+    ins.add_argument("model")
+    ins.set_defaults(func=cmd_inspect)
 
-    s = sub.add_parser("sensitivity", help="value of each tensor group")
-    s.add_argument("model")
-    s.set_defaults(func=cmd_sensitivity)
+    ana = sub.add_parser("analyze", aliases=["sensitivity"],
+                         help="measure which parts of a model are worth GPU space")
+    ana.add_argument("model")
+    ana.set_defaults(func=cmd_sensitivity)
 
-    t = sub.add_parser("tune", help="find the best settings for a model")
-    t.add_argument("model")
-    t.add_argument("--ref-model", help="unsqueezed/high-precision model for the quality baseline (defaults to --model)")
-    t.add_argument("--calib", default=str(CALIB_FILE))
-    t.add_argument("--min-quality", type=float, default=0.97)
-    t.set_defaults(func=cmd_tune)
+    tune = sub.add_parser("tune",
+                          help="find the best settings for a model")
+    tune.add_argument("model")
+    tune.add_argument("--ref-model", help="higher-precision model to measure quality against (defaults to the model itself)")
+    tune.add_argument("--calib", default=str(CALIB_FILE))
+    tune.add_argument("--min-quality", type=float, default=0.97)
+    tune.set_defaults(func=cmd_tune)
 
-    r = sub.add_parser("report", help="show recent recorded runs")
-    r.add_argument("--limit", type=int, default=20)
-    r.set_defaults(func=cmd_report)
+    base = sub.add_parser("baseline", aliases=["default"],
+                          help="measure llama.cpp untuned, to compare against")
+    base.add_argument("model")
+    base.add_argument("--ref-model", help="higher-precision model to measure quality against (defaults to the model itself)")
+    base.add_argument("--calib", default=str(CALIB_FILE))
+    base.set_defaults(func=cmd_default)
 
-    st = sub.add_parser("start", help="launch the local Optimum dashboard (graphs + metrics)")
-    st.add_argument("--port", type=int, default=8765)
-    st.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
-    st.set_defaults(func=cmd_start)
+    pred = sub.add_parser("predict",
+                          help="estimate speed and quality without running anything")
+    pred.add_argument("model")
+    pred.add_argument("--ngl", type=int, default=99)
+    pred.add_argument("--threads", type=int, default=6)
+    pred.add_argument("--ctk", default="f16")
+    pred.set_defaults(func=cmd_predict)
 
-    d = sub.add_parser("default", help="measure llama.cpp with every setting left at its own default (no tuning)")
-    d.add_argument("model")
-    d.add_argument("--ref-model", help="unsqueezed/high-precision model for the quality baseline (defaults to --model)")
-    d.add_argument("--calib", default=str(CALIB_FILE))
-    d.set_defaults(func=cmd_default)
+    hist = sub.add_parser("history", aliases=["report"],
+                          help="list past runs")
+    hist.add_argument("--limit", type=int, default=20)
+    hist.set_defaults(func=cmd_report)
 
-    p_ = sub.add_parser("predict", help="predict speed/quality for a setting combo "
-                                        "without running it (cost model, instant)")
-    p_.add_argument("model")
-    p_.add_argument("--ngl", type=int, default=99)
-    p_.add_argument("--threads", type=int, default=6)
-    p_.add_argument("--ctk", default="f16")
-    p_.set_defaults(func=cmd_predict)
+    dash = sub.add_parser("dashboard", aliases=["start"],
+                          help="open the dashboard with charts and results")
+    dash.add_argument("--port", type=int, default=8765)
+    dash.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
+    dash.set_defaults(func=cmd_start)
 
-    sv = sub.add_parser("serve", help="launch llama-server.exe with your best known settings "
-                                      "and open llama.cpp's own web UI")
-    sv.add_argument("model")
-    sv.add_argument("--ctx", type=int, default=4096)
-    sv.add_argument("--port", type=int, default=8080)
-    sv.add_argument("--min-quality", type=float, default=0.9)
-    sv.set_defaults(func=cmd_serve)
+    run = sub.add_parser("run", aliases=["serve"],
+                         help="launch the model with its best settings and open the web UI")
+    run.add_argument("model")
+    run.add_argument("--ctx", type=int, default=4096)
+    run.add_argument("--port", type=int, default=8080)
+    run.add_argument("--min-quality", type=float, default=0.9)
+    run.set_defaults(func=cmd_serve)
 
     return p
 

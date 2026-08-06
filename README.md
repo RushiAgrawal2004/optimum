@@ -17,7 +17,7 @@ irm https://optimumtune.github.io/install.ps1 | iex
 Open a new terminal, then check it worked:
 
 ```powershell
-optimum probe
+optimum gpu
 ```
 
 ---
@@ -43,18 +43,21 @@ precise to compare against.
 
 | Command | What it does |
 |---|---|
-| `probe` | Show GPU name, free/usable VRAM, free RAM |
-| `inspect <model>` | Show architecture, layer count, and tensor-group sizes |
-| `sensitivity <model>` | Measure how much speed each tensor group is worth per MB |
-| `tune <model> --ref-model <ref>` | Full pipeline — measure, build candidates, benchmark speed + quality, pick the best above the quality floor |
-| `default <model> --ref-model <ref>` | Measure `llama.cpp` with zero settings overridden — the untuned baseline |
-| `predict <model>` | Estimate speed/quality for a setting combo without running it |
-| `report` | List recorded runs |
-| `start` | Open the local dashboard — charts, metrics, launch commands |
-| `serve <model>` | Launch `llama-server.exe` with the best known settings and open its web UI |
+| `gpu` | Show your GPU and memory |
+| `inspect <model>` | Show a model's size, layers and parts |
+| `analyze <model>` | Measure which parts of a model are worth GPU space |
+| `tune <model> --ref-model <ref>` | Find the best settings — measure, build candidates, benchmark speed + quality, pick the best above the quality floor |
+| `baseline <model> --ref-model <ref>` | Measure `llama.cpp` untuned, to compare against |
+| `predict <model>` | Estimate speed and quality without running anything |
+| `history` | List past runs |
+| `dashboard` | Open the dashboard with charts and results |
+| `run <model>` | Launch the model with its best settings and open the web UI |
 
 Common flags: `--min-quality 0.97`, `--ctx 4096`, `--port`, `--limit`.
 Run `optimum <command> --help` for the full list.
+
+The older names (`probe`, `sensitivity`, `default`, `report`, `start`, `serve`)
+still work as aliases.
 
 ---
 
@@ -62,9 +65,9 @@ Run `optimum <command> --help` for the full list.
 
 ```powershell
 optimum tune qwen1.5b-q4.gguf --ref-model qwen1.5b-q8.gguf --min-quality 0.9
-optimum default qwen1.5b-q4.gguf --ref-model qwen1.5b-q8.gguf   # baseline to compare against
-optimum start                                                    # view results as charts
-optimum serve qwen1.5b-q4.gguf                                   # run it for real
+optimum baseline qwen1.5b-q4.gguf --ref-model qwen1.5b-q8.gguf   # compare against untuned
+optimum dashboard                                                # view results as charts
+optimum run qwen1.5b-q4.gguf                                     # launch it for real
 ```
 
 Every measurement is saved to `results.db`, so nothing is ever re-run
@@ -98,7 +101,7 @@ cd app
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install nvidia-ml-py psutil gguf pytest requests
-python cli.py probe        # same commands, via cli.py
+python cli.py gpu          # same commands, via cli.py
 ```
 
 Tests:

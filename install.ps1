@@ -93,9 +93,9 @@ $env:NATIVETUNE_HOME = $dataHome
 Write-Host ""
 Write-Host "Installed. Open a NEW terminal (so PATH picks up the change), then:" -ForegroundColor Green
 Write-Host ""
-Write-Host "  optimum probe"
+Write-Host "  optimum gpu"
 Write-Host ""
-Write-Host "Before 'tune'/'default'/'serve' will work, put these here yourself:"
+Write-Host "Before 'tune'/'baseline'/'run' will work, put these here yourself:"
 Write-Host "  $dataHome\llama\    <- llama.cpp binaries (llama-bench.exe, llama-server.exe, ...)"
 Write-Host "  $dataHome\models\   <- your .gguf model files"
 Write-Host "  $dataHome\data\calib-50kb.txt   <- ~50KB plain text for quality measurement"
