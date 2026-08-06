@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optimum-nativetune"
+version = "0.1.0"
+description = "Auto-tunes llama.cpp for your GPU and model, measuring real speed and answer quality on your own machine."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "nvidia-ml-py",
+    "psutil",
+    "gguf",
+    "requests",
+]
+
+[project.scripts]
+optimum = "cli:main"
+
+[project.urls]
+Repository = "https://github.com/RushiAgrawal2004/optimum"
+
+[tool.setuptools]
+py-modules = [
+    "cache", "cli", "config", "costmodel", "db", "evaluate", "frontier",
+    "hardware", "model_info", "packer", "quality", "reference", "report",
+    "runner", "sanity", "sensitivity", "speed", "tune", "webapp",
+]
+package-dir = { "" = "app" }

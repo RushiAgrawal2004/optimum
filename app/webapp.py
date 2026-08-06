@@ -485,15 +485,16 @@ function renderScatter(runs) {{
   const legend = el('div', {{class: 'legend'}}, [
     el('span', {{}}, [el('span', {{class:'swatch', style:'background:var(--series-1)'}}), 'Kept (on frontier)']),
     el('span', {{}}, [el('span', {{class:'swatch', style:'background:var(--series-dominated)'}}), 'Dropped (dominated)']),
+    el('span', {{}}, ['Larger ring = best pick / untouched default']),
   ]);
   card.appendChild(legend);
 
-  const W = 640, H = 360, PAD = 44;
+  const W = 640, H = 380, PAD_L = 56, PAD_R = 20, PAD_T = 20, PAD_B = 48;
   const xs = runs.map(r => r.gen_tps), ys = runs.map(r => r.quality);
-  const xMin = 0, xMax = Math.max(...xs) * 1.1;
+  const xMin = 0, xMax = Math.max(...xs) * 1.1 || 1;
   const yMin = Math.min(0.5, Math.min(...ys) - 0.05), yMax = 1.0;
-  const sx = v => PAD + (W - 2*PAD) * (v - xMin) / (xMax - xMin || 1);
-  const sy = v => H - PAD - (H - 2*PAD) * (v - yMin) / (yMax - yMin || 1);
+  const sx = v => PAD_L + (W - PAD_L - PAD_R) * (v - xMin) / (xMax - xMin || 1);
+  const sy = v => H - PAD_B - (H - PAD_T - PAD_B) * (v - yMin) / (yMax - yMin || 1);
 
   const svgNS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNS, 'svg');
@@ -502,34 +503,87 @@ function renderScatter(runs) {{
   svg.style.maxWidth = '640px';
   svg.style.display = 'block';
 
-  function line(x1,y1,x2,y2,cls) {{
+  function line(x1,y1,x2,y2) {{
     const l = document.createElementNS(svgNS, 'line');
     l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2);
     l.setAttribute('stroke', 'var(--grid)'); l.setAttribute('stroke-width', '1');
     svg.appendChild(l);
   }}
-  // gridlines
-  for (let i = 0; i <= 4; i++) {{
-    const gy = PAD + i * (H - 2*PAD) / 4;
-    line(PAD, gy, W-PAD, gy);
+  function tick(x, y, dx, dy) {{
+    const l = document.createElementNS(svgNS, 'line');
+    l.setAttribute('x1', x); l.setAttribute('y1', y);
+    l.setAttribute('x2', x + dx); l.setAttribute('y2', y + dy);
+    l.setAttribute('stroke', 'var(--axis)'); l.setAttribute('stroke-width', '1');
+    svg.appendChild(l);
+  }}
+  function label(x, y, text, anchor) {{
+    const t = document.createElementNS(svgNS, 'text');
+    t.setAttribute('x', x); t.setAttribute('y', y);
+    t.setAttribute('fill', 'var(--text-muted)'); t.setAttribute('font-size', '11');
+    t.setAttribute('text-anchor', anchor || 'middle');
+    t.textContent = text;
+    svg.appendChild(t);
+    return t;
+  }}
+
+  const TICKS = 4;
+  // horizontal gridlines + y-axis value ticks (quality)
+  for (let i = 0; i <= TICKS; i++) {{
+    const gy = PAD_T + i * (H - PAD_T - PAD_B) / TICKS;
+    line(PAD_L, gy, W - PAD_R, gy);
+    const val = yMax - i * (yMax - yMin) / TICKS;
+    tick(PAD_L - 4, gy, 4, 0);
+    label(PAD_L - 9, gy + 3, fmt(val, 2), 'end');
+  }}
+  // x-axis value ticks (tok/s)
+  for (let i = 0; i <= TICKS; i++) {{
+    const gx = PAD_L + i * (W - PAD_L - PAD_R) / TICKS;
+    const val = xMin + i * (xMax - xMin) / TICKS;
+    tick(gx, H - PAD_B, 0, 4);
+    label(gx, H - PAD_B + 16, fmt(val, 0), 'middle');
   }}
   // axes
   const axis = document.createElementNS(svgNS, 'line');
-  axis.setAttribute('x1', PAD); axis.setAttribute('y1', H-PAD);
-  axis.setAttribute('x2', W-PAD); axis.setAttribute('y2', H-PAD);
+  axis.setAttribute('x1', PAD_L); axis.setAttribute('y1', H-PAD_B);
+  axis.setAttribute('x2', W-PAD_R); axis.setAttribute('y2', H-PAD_B);
   axis.setAttribute('stroke', 'var(--axis)'); axis.setAttribute('stroke-width', '1');
   svg.appendChild(axis);
   const axisY = document.createElementNS(svgNS, 'line');
-  axisY.setAttribute('x1', PAD); axisY.setAttribute('y1', PAD);
-  axisY.setAttribute('x2', PAD); axisY.setAttribute('y2', H-PAD);
+  axisY.setAttribute('x1', PAD_L); axisY.setAttribute('y1', PAD_T);
+  axisY.setAttribute('x2', PAD_L); axisY.setAttribute('y2', H-PAD_B);
   axisY.setAttribute('stroke', 'var(--axis)'); axisY.setAttribute('stroke-width', '1');
   svg.appendChild(axisY);
 
   const xLabel = document.createElementNS(svgNS, 'text');
-  xLabel.setAttribute('x', W/2); xLabel.setAttribute('y', H - 8);
-  xLabel.setAttribute('fill', 'var(--text-muted)'); xLabel.setAttribute('font-size', '11');
-  xLabel.setAttribute('text-anchor', 'middle'); xLabel.textContent = 'tokens / sec';
+  xLabel.setAttribute('x', (PAD_L + W - PAD_R)/2); xLabel.setAttribute('y', H - 6);
+  xLabel.setAttribute('fill', 'var(--text-secondary)'); xLabel.setAttribute('font-size', '11');
+  xLabel.setAttribute('text-anchor', 'middle'); xLabel.textContent = 'tokens / sec  (higher = faster)';
   svg.appendChild(xLabel);
+
+  const yLabel = document.createElementNS(svgNS, 'text');
+  yLabel.setAttribute('x', -(PAD_T + H - PAD_B)/2); yLabel.setAttribute('y', 14);
+  yLabel.setAttribute('fill', 'var(--text-secondary)'); yLabel.setAttribute('font-size', '11');
+  yLabel.setAttribute('text-anchor', 'middle');
+  yLabel.setAttribute('transform', 'rotate(-90)');
+  yLabel.textContent = 'quality (higher = closer to reference)';
+  svg.appendChild(yLabel);
+
+  // Pareto frontier line: connect the kept points in speed order, so the
+  // "good options form a curve along the edge" (the whole point of the chart)
+  // is a visible line, not something the reader has to reconstruct from dots.
+  const frontierPts = runs
+    .filter(r => r.on_frontier && r.gen_tps != null && r.quality != null)
+    .sort((a, b) => a.gen_tps - b.gen_tps);
+  if (frontierPts.length > 1) {{
+    const poly = document.createElementNS(svgNS, 'polyline');
+    poly.setAttribute('points', frontierPts.map(r => sx(r.gen_tps) + ',' + sy(r.quality)).join(' '));
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', 'var(--series-1)');
+    poly.setAttribute('stroke-width', '2');
+    poly.setAttribute('stroke-linejoin', 'round');
+    poly.setAttribute('opacity', '0.5');
+    svg.appendChild(poly);
+  }}
 
   const tooltip = document.getElementById('tooltip');
 
@@ -552,8 +606,14 @@ function renderScatter(runs) {{
     dot.setAttribute('stroke-width', r.is_default ? '3' : '2');
 
     const show = (evt) => {{
-      tooltip.innerHTML = '<b>' + r.label + '</b><br>' + fmt(r.gen_tps,1) + ' tok/s · quality ' + fmt(r.quality,4) +
-        '<br>ngl=' + r.ngl + ' t=' + r.threads + ' ctk=' + r.ctk;
+      tooltip.textContent = '';
+      tooltip.appendChild(el('b', {{}}, [r.label]));
+      tooltip.appendChild(document.createElement('br'));
+      tooltip.appendChild(document.createTextNode(
+        fmt(r.gen_tps,1) + ' tok/s · quality ' + fmt(r.quality,4)));
+      tooltip.appendChild(document.createElement('br'));
+      tooltip.appendChild(document.createTextNode(
+        'ngl=' + r.ngl + ' t=' + r.threads + ' ctk=' + r.ctk));
       tooltip.style.left = evt.clientX + 'px';
       tooltip.style.top = evt.clientY + 'px';
       tooltip.style.opacity = 1;
@@ -568,8 +628,14 @@ function renderScatter(runs) {{
     svg.appendChild(dot);
 
     if (r.is_best || r.is_default) {{
+      // best-pick and untouched-default markers often sit close together on
+      // the speed axis; anchor each label pointing away from the other so
+      // the two never typeset into one run-on string.
       const lbl = document.createElementNS(svgNS, 'text');
-      lbl.setAttribute('x', cx + 10); lbl.setAttribute('y', cy - 10);
+      const toRight = r.is_best;
+      lbl.setAttribute('x', cx + (toRight ? 10 : -10));
+      lbl.setAttribute('y', cy - 10);
+      lbl.setAttribute('text-anchor', toRight ? 'start' : 'end');
       lbl.setAttribute('fill', 'var(--text-primary)'); lbl.setAttribute('font-size', '11');
       lbl.setAttribute('font-weight', '600');
       lbl.textContent = r.is_best ? 'best pick' : 'untouched default';
@@ -582,7 +648,8 @@ function renderScatter(runs) {{
   const tbl = el('table', {{style: 'margin-top:20px'}});
   tbl.appendChild(el('thead', {{}}, [el('tr', {{}}, [
     el('th', {{}}, ['Label']), el('th', {{class:'num'}}, ['tok/s']),
-    el('th', {{class:'num'}}, ['Quality']), el('th', {{}}, ['ngl']),
+    el('th', {{class:'num'}}, ['Quality']), el('th', {{}}, ['Frontier']),
+    el('th', {{}}, ['ngl']),
     el('th', {{}}, ['threads']), el('th', {{}}, ['ctk']), el('th', {{}}, ['-ot']),
     el('th', {{}}, ['Command'])])]));
   const tbody = el('tbody');
@@ -597,6 +664,7 @@ function renderScatter(runs) {{
       el('td', {{}}, [r.label + (r.is_best ? ' ← pick' : '')]),
       el('td', {{class:'num'}}, [fmt(r.gen_tps,1)]),
       el('td', {{class:'num'}}, [fmt(r.quality,4)]),
+      el('td', {{}}, [r.on_frontier ? 'kept' : 'dropped']),
       el('td', {{}}, [String(r.ngl)]),
       el('td', {{}}, [String(r.threads)]),
       el('td', {{}}, [r.ctk]),

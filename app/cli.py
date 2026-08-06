@@ -7,7 +7,7 @@ import model_info
 import sensitivity
 import speed
 import tune as tune_module
-from config import MODEL_DIR
+from config import CALIB_FILE, MODEL_DIR
 
 
 def _resolve(name: str) -> Path:
@@ -121,6 +121,121 @@ def cmd_default(args):
           "'optimum report' next to your tuned candidates)")
 
 
+def cmd_predict(args):
+    import costmodel
+    import db
+
+    model = _resolve(args.model)
+    info = model_info.inspect(model)
+
+    con = db.connect()
+    models = {m["model_hash"]: m for m in db.load_all(con, "models")}
+    runs = db.load_all(con, "runs")
+    rows = costmodel.build_training_set(runs, models)
+
+    pred = costmodel.predict(rows, info.file_size_mb, info.n_layers,
+                             args.ngl, args.threads, args.ctk)
+    if pred is None:
+        sys.exit("no recorded runs yet - run 'tune' or 'default' on at least one "
+                 "model first, the cost model has nothing to learn from")
+
+    print(f"predicted   {pred.gen_tps:6.1f} tok/s   quality {pred.quality:.4f}   "
+          f"confidence={pred.confidence}  "
+          f"(nearest neighbor distance {pred.nearest_dist:.2f}, "
+          f"{pred.n_neighbors} of {pred.n_training_rows} recorded runs used)")
+
+    import reference
+    model_hash = reference.file_hash(model)
+    actual = next((r for r in runs if r["model_hash"] == model_hash
+                   and r["ngl"] == args.ngl and r["threads"] == args.threads
+                   and r["ctk"] == args.ctk and r["gen_tps"] is not None), None)
+    if actual:
+        print(f"actual      {actual['gen_tps']:6.1f} tok/s   quality {actual['quality']:.4f}   "
+              f"(this exact setting was already measured for real)")
+        print(f"error       {pred.gen_tps - actual['gen_tps']:+6.1f} tok/s   "
+              f"{pred.quality - actual['quality']:+.4f} quality")
+    else:
+        print("(no real measurement of this exact setting on this model to check against)")
+
+
+def cmd_serve(args):
+    import subprocess
+    import time
+    import webbrowser
+    from types import SimpleNamespace
+
+    import db
+    import frontier
+    import reference
+    import requests
+    from config import LLAMA_DIR
+
+    model = _resolve(args.model)
+    model_hash = reference.file_hash(model)
+
+    con = db.connect()
+    runs = [r for r in db.load_all(con, "runs")
+            if r["model_hash"] == model_hash
+            and r["gen_tps"] is not None and r["quality"] is not None]
+    if not runs:
+        sys.exit(f"no tuned settings found for {model.name} yet.\n"
+                 f"run one of these first:\n"
+                 f"  python cli.py tune {model.name} --ref-model <higher-precision-model>\n"
+                 f"  python cli.py default {model.name} --ref-model <higher-precision-model>")
+
+    wrapped = [SimpleNamespace(gen_tps=r["gen_tps"], quality=r["quality"], _row=r) for r in runs]
+    front = frontier.frontier(wrapped)
+    good = [w for w in front if w.quality >= args.min_quality]
+    pick = max(good, key=lambda w: w.gen_tps) if good else max(front, key=lambda w: w.gen_tps)
+    best = pick._row
+
+    server_args = [str(LLAMA_DIR / "llama-server.exe"), "-m", str(model),
+                  "-c", str(args.ctx), "--port", str(args.port)]
+    if best["ngl"] is not None:
+        server_args += ["-ngl", str(best["ngl"])]
+    if best["threads"] is not None:
+        server_args += ["-t", str(best["threads"])]
+    if best["ctk"] and best["ctk"] != "default":
+        server_args += ["-ctk", best["ctk"], "-ctv", best["ctk"]]
+    if best["ot_pattern"]:
+        server_args += ["-ot", best["ot_pattern"]]
+
+    print(f"using settings: {best['label']}  ({best['gen_tps']:.1f} tok/s, "
+          f"quality {best['quality']:.4f})")
+    print(" ".join(server_args))
+
+    proc = subprocess.Popen(server_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"\nwaiting for llama-server to come up at {url} ...")
+
+    ready = False
+    for _ in range(90):
+        if proc.poll() is not None:
+            sys.exit(f"llama-server exited early (code {proc.returncode}) - "
+                     f"check the settings above, or that the port isn't already in use")
+        try:
+            if requests.get(url + "health", timeout=1).status_code == 200:
+                ready = True
+                break
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+
+    if not ready:
+        proc.kill()
+        sys.exit("llama-server did not become healthy in time")
+
+    print(f"ready - opening {url} (llama.cpp's own web UI)")
+    webbrowser.open(url)
+    print("press Ctrl+C to stop the server")
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        print("\nstopping llama-server...")
+        proc.terminate()
+        proc.wait()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="optimum")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -138,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("tune", help="find the best settings for a model")
     t.add_argument("model")
     t.add_argument("--ref-model", help="unsqueezed/high-precision model for the quality baseline (defaults to --model)")
-    t.add_argument("--calib", default=r"C:\nativetune\data\calib-50kb.txt")
+    t.add_argument("--calib", default=str(CALIB_FILE))
     t.add_argument("--min-quality", type=float, default=0.97)
     t.set_defaults(func=cmd_tune)
 
@@ -154,12 +269,33 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("default", help="measure llama.cpp with every setting left at its own default (no tuning)")
     d.add_argument("model")
     d.add_argument("--ref-model", help="unsqueezed/high-precision model for the quality baseline (defaults to --model)")
-    d.add_argument("--calib", default=r"C:\nativetune\data\calib-50kb.txt")
+    d.add_argument("--calib", default=str(CALIB_FILE))
     d.set_defaults(func=cmd_default)
+
+    p_ = sub.add_parser("predict", help="predict speed/quality for a setting combo "
+                                        "without running it (cost model, instant)")
+    p_.add_argument("model")
+    p_.add_argument("--ngl", type=int, default=99)
+    p_.add_argument("--threads", type=int, default=6)
+    p_.add_argument("--ctk", default="f16")
+    p_.set_defaults(func=cmd_predict)
+
+    sv = sub.add_parser("serve", help="launch llama-server.exe with your best known settings "
+                                      "and open llama.cpp's own web UI")
+    sv.add_argument("model")
+    sv.add_argument("--ctx", type=int, default=4096)
+    sv.add_argument("--port", type=int, default=8080)
+    sv.add_argument("--min-quality", type=float, default=0.9)
+    sv.set_defaults(func=cmd_serve)
 
     return p
 
 
-if __name__ == "__main__":
+def main():
+    """Console-script entry point (registered in pyproject.toml as `optimum`)."""
     args = build_parser().parse_args()
     args.func(args)
+
+
+if __name__ == "__main__":
+    main()
